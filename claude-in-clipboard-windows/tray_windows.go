@@ -82,6 +82,7 @@ func flash(icon, text string) {
 }
 
 func fail(msg string) {
+	logf("fail: %s", msg)
 	task = nil
 	messageBeep(0x10) // MB_ICONHAND
 	killTimer(mainHwnd, timerRevert)
@@ -101,7 +102,7 @@ func appendMenu(menu uintptr, flags uintptr, id uintptr, text string) {
 
 // showMenu pops up the tray menu at the pointer (the equivalent of clicking the menu bar icon on macOS).
 func showMenu() {
-	dir := projectNow(250 * time.Millisecond)
+	t := targetNow(250 * time.Millisecond)
 	refreshAccount() // async: the menu shows the last known account until this returns
 
 	menu, _, _ := pCreatePopupMenu.Call()
@@ -109,11 +110,15 @@ func showMenu() {
 	const off = mfString | mfGrayed | mfDisabled
 	appendMenu(menu, off, 0, infoText)
 	appendMenu(menu, mfSeparator, 0, "")
-	if dir == "" {
-		appendMenu(menu, off, 0, "VS Code: no project found")
-	} else {
-		appendMenu(menu, off, 0, "VS Code: "+logic.FolderName(dir))
-		appendMenu(menu, off, 0, "    "+logic.ShortPath(dir))
+	switch {
+	case !t.found():
+		appendMenu(menu, off, 0, "No VS Code project or Notepad window found")
+	case t.kind == "notepad" && t.file == "":
+		appendMenu(menu, off, 0, "Notepad: "+t.name)
+		appendMenu(menu, off, 0, "    (file location unknown: using a scratch folder)")
+	default:
+		appendMenu(menu, off, 0, t.app()+": "+t.name)
+		appendMenu(menu, off, 0, "    "+logic.ShortPath(t.dir))
 	}
 	appendMenu(menu, off, 0, accountText())
 	appendMenu(menu, mfSeparator, 0, "")

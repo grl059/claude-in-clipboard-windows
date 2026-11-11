@@ -44,7 +44,9 @@ func showPrompt() {
 	x := int(area.left+area.right)/2 - promptW/2
 	y := int(area.top+area.bottom)/2 - promptH/2
 	pSetWindowPos.Call(prompt.hwnd, hwndTopmost, uintptr(int32(x)), uintptr(int32(y)), promptW, promptH, swpShowWindow)
-	if !forceForeground(prompt.hwnd) {
+	ok := forceForeground(prompt.hwnd)
+	logf("show prompt: got foreground=%v", ok)
+	if !ok {
 		pShowWindow.Call(prompt.hwnd, swHide)
 		flash("exclamationmark.triangle", "Windows wouldn't give the prompt keyboard focus")
 		return
@@ -90,6 +92,7 @@ func forceForeground(hwnd uintptr) bool {
 }
 
 func promptProc(hwnd, m, wp, lp uintptr) uintptr {
+	defer guard("promptProc")
 	switch uint32(m) {
 	case wmChar:
 		onPromptChar(uint16(wp))

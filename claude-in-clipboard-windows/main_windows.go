@@ -1,7 +1,7 @@
 //go:build windows
 
 // ClaudeClip for Windows: tray app. Tap the trigger key (Right Ctrl by default), type a prompt blind,
-// press Enter. Claude Code reads your current VS Code project and puts code on the clipboard.
+// press Enter. Claude Code reads your current VS Code project (or the file open in Notepad) and puts the result on the clipboard.
 // Double-tap clears the clipboard; holding the key previews the clipboard.
 package main
 
@@ -63,8 +63,10 @@ func main() {
 	if os.Getenv("CLAUDECLIP_DEBUG") == "1" {
 		debugPrompt = true
 	}
+	initLog()
 	cfg = loadSettings()
 	infoText = readyText()
+	logf("start: model=%s trigger=%s debugPrompt=%v args=%v", cfg.Model, cfg.Trigger, debugPrompt, os.Args[1:])
 
 	class := u16("ClaudeClipMain")
 	registerClass(class, mainProc)
@@ -79,6 +81,7 @@ func main() {
 	// Watching the trigger key system-wide needs a low-level keyboard hook (no special permission).
 	hookCallback = syscall.NewCallback(keyboardProc)
 	hook, _, _ = pSetWindowsHookExW.Call(whKeyboardLL, hookCallback, getModuleHandle(), 0)
+	logf("keyboard hook installed: %v", hook != 0)
 	if hook == 0 {
 		fail("Could not install the keyboard hook")
 	}
@@ -98,6 +101,7 @@ func main() {
 // MARK: keyboard
 
 func keyboardProc(nCode, wp, lp uintptr) uintptr {
+	defer guard("keyboardProc")
 	if int32(nCode) == 0 { // HC_ACTION
 		k := (*kbdLLHook)(fromPtr(lp))
 		down := wp == wmKeyDown || wp == wmSysKeyDown
@@ -149,6 +153,7 @@ func keyPhysicallyDown(vk uint32) bool {
 // MARK: main window
 
 func mainProc(hwnd, m, wp, lp uintptr) uintptr {
+	defer guard("mainProc")
 	if m == taskbarCreatedMsg && m != 0 { // Explorer restarted: put the icon back
 		trayNotify(nimAdd)
 		return 0
@@ -166,8 +171,8 @@ func mainProc(hwnd, m, wp, lp uintptr) uintptr {
 		handleDone()
 		return 0
 	case wmStarted:
-		if task != nil && task.project() != "" {
-			infoText = fmt.Sprintf("Working in %s with %s…", logic.FolderName(task.project()), modelName())
+		if task != nil && task.target().found() {
+			infoText = fmt.Sprintf("Working in %s with %s…", task.target().name, modelName())
 			trayNotify(nimModify)
 		}
 		return 0
@@ -200,6 +205,7 @@ func mainProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmDestroy:
+		logf("quit (window destroyed)")
 		if hook != 0 {
 			pUnhookWindowsHookEx.Call(hook)
 		}
@@ -216,6 +222,7 @@ func mainProc(hwnd, m, wp, lp uintptr) uintptr {
 // MARK: actions
 
 func onTap(t float64) {
+	logf("tap (prompt visible=%v, %.0f ms since last tap)", prompt.visible, (t-lastTap)*1000)
 	if t-lastTap < logic.DoubleTapWindow { // double tap: first tap opened the prompt, so close it and clear
 		lastTap = 0
 		hidePrompt()
@@ -235,6 +242,7 @@ func onTap(t float64) {
 func modelName() string { return strings.ToUpper(cfg.Model[:1]) + cfg.Model[1:] }
 
 func runPrompt(text string) {
+	logf("run prompt (%d chars)", len([]rune(text)))
 	if task != nil {
 		task.kill() // a new prompt replaces a running one
 	}
@@ -247,6 +255,7 @@ func runPrompt(text string) {
 
 func handleDone() {
 	for _, r := range takeResults() {
+		logf("claude finished: id=%d current=%d code=%d stdout=%d bytes stderr=%q", r.id, taskID, r.code, len(r.out), r.err)
 		if r.id != taskID { // replaced by a newer prompt
 			continue
 		}

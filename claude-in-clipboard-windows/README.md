@@ -1,6 +1,6 @@
 # ClaudeClip for Windows
 
-Tap **Right Ctrl**, type a prompt (invisibly), press **Enter**. Claude Code reads the project open in VS Code and puts the code on your clipboard. Double-tap **Right Ctrl** to clear the clipboard.
+Tap **Right Ctrl**, type a prompt (invisibly), press **Enter**. Claude Code reads the project open in **VS Code** (or the file open in **Notepad**) and puts the result on your clipboard. Double-tap **Right Ctrl** to clear the clipboard.
 
 It lives in the system tray: no taskbar button, no window. A Windows port of [claude-in-clipboard](https://github.com/roaziy/claude-in-clipboard) for macOS.
 
@@ -22,7 +22,7 @@ The Fn key is handled inside the keyboard's firmware, and Windows never sees it,
 
 - Windows 10 or 11 (x64 or ARM64)
 - [Claude Code](https://code.claude.com/docs/en/setup) installed and logged in (`claude` works in a terminal)
-- VS Code (the regular one, not Insiders)
+- VS Code (the regular one, not Insiders) and/or Notepad (the classic or the Windows 11 app)
 
 ## Install
 
@@ -72,16 +72,30 @@ Click the tray icon for the menu: status, the project and Claude account it will
 
 If an answer spans several files, they come as one block with a `// path/to/file` comment before each file.
 
-## How it finds your project
+## How it decides where to work
 
-1. Looks through your open windows for VS Code (`Code.exe`) and reads the title of the frontmost one, for example `index.tsx - my-app - Visual Studio Code`. This works even when Chrome or another app is in front.
+ClaudeClip looks at your open windows and uses whichever of VS Code or Notepad you used last (the frontmost of the two), even when another app such as Chrome is in front.
+
+**VS Code**
+
+1. Reads the title of that window, for example `index.tsx - my-app - Visual Studio Code`.
 2. Matches `my-app` against the folders VS Code has opened (`%APPDATA%\Code\User\workspaceStorage`) to get the full path.
 3. If nothing matches, uses the project you used most recently.
+
+**Notepad**
+
+1. Reads the file name from the title, for example `notes.txt - Notepad` (a leading `*` for unsaved changes is ignored).
+2. Notepad's title has no folder, so ClaudeClip finds the file's folder through the shortcut Windows leaves in `%APPDATA%\Microsoft\Windows\Recent` when you open a file from Explorer or Notepad's Open dialog. Claude then works in that folder, knows which file is open, and can read it.
+3. For an unsaved document (`Untitled`), or a file Windows has no recent entry for, Claude works in an empty scratch folder (`%APPDATA%\ClaudeClip\scratch`). The tray menu says so. It then only knows what you type in the prompt.
+4. In Notepad the reply is plain text to paste (not only code): a summary, an email draft, a regex, a code snippet, whatever you ask for. Ask for it in the prompt, for example `rewrite the open file as a polite email` or `fix the grammar in notes.txt`.
+
+The tray menu shows which one it would use right now ("VS Code: my-app" or "Notepad: notes.txt").
 
 ## Privacy and safety
 
 - Runs `claude -p` locally with your own Claude Code login. No other servers.
 - Claude only gets read-only tools (`Read`, `Grep`, `Glob`). It can't edit files or run commands.
+- In Notepad, Claude works in the folder of the open file, so it can read the other files next to it (for example everything on your Desktop if the file is there). It can only read, and only locally. Keep sensitive files out of that folder, or use an unsaved `Untitled` document, which runs in an empty scratch folder.
 - The project's `.claude/settings.json` (including hooks) is ignored (`--setting-sources user`), so a cloned repo can't run commands on your PC.
 - Chats aren't saved (`--no-session-persistence`).
 - MCP servers are skipped (`--strict-mcp-config`), which roughly halves startup time.
@@ -90,7 +104,8 @@ If an answer spans several files, they come as one block with a `// path/to/file
 
 ## Limitations
 
-- VS Code only, not Cursor or VS Code Insiders. Remote and WSL workspaces aren't found (only local folders).
+- VS Code and Notepad only, not Cursor, VS Code Insiders or other editors. Remote and WSL workspaces aren't found (only local folders).
+- Notepad: the open file's folder is only known if Windows has a recent entry for it. Files opened by a path typed on a command line or dragged in may use the scratch folder instead. Only the active tab's file is used, and Claude reads the file from disk, so save first if you want it to see your latest edits.
 - Two open projects with the same folder name: it picks the newer one.
 - Every prompt is a fresh chat, so no follow-ups.
 - The trigger key doesn't work while an app running **as administrator** has focus (Windows blocks hooks from seeing it). Run ClaudeClip as administrator too if you need that.
@@ -105,7 +120,7 @@ If an answer spans several files, they come as one block with a `// path/to/file
 | `main_windows.go` | Entry point, keyboard hook, tap and run flow |
 | `prompt_windows.go`, `ghost_windows.go` | The invisible prompt window and the hold-to-preview overlay |
 | `tray_windows.go`, `icons_windows.go` | Tray icon, menu, and the icons (drawn in code) |
-| `vscode_windows.go`, `claude_windows.go` | Finding the VS Code project, running Claude Code |
+| `editor_windows.go`, `claude_windows.go` | Finding the VS Code project or Notepad file, running Claude Code |
 | `clipboard_windows.go`, `settings_windows.go`, `win32_windows.go` | Clipboard, settings and autostart, raw Win32 bindings |
 | `build.ps1` / `build.sh` | Vet, test, then build `build\ClaudeClip.exe` |
 | `.github/workflows/release.yml` | Builds and publishes a release on every push to `main` |

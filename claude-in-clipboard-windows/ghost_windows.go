@@ -134,6 +134,7 @@ func ghostScrollBy(dx, dy float64) {
 }
 
 func ghostProc(hwnd, m, wp, lp uintptr) uintptr {
+	defer guard("ghostProc")
 	switch uint32(m) {
 	case wmEraseBkgnd:
 		return 1

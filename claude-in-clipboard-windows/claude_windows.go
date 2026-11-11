@@ -46,12 +46,16 @@ func findClaude() (string, error) {
 }
 
 // systemPromptFile writes the prompt where claude can read it (a file avoids Windows quoting problems).
-func systemPromptFile() (string, error) {
-	p := filepath.Join(dataDir(), "system-prompt.txt")
-	if old, err := os.ReadFile(p); err == nil && string(old) == logic.SystemPrompt {
+func systemPromptFile(t target) (string, error) {
+	name, text := "system-prompt.txt", logic.SystemPrompt
+	if t.kind == "notepad" {
+		name, text = "system-prompt-notepad.txt", logic.NotepadSystemPrompt
+	}
+	p := filepath.Join(dataDir(), name)
+	if old, err := os.ReadFile(p); err == nil && string(old) == text {
 		return p, nil
 	}
-	return p, os.WriteFile(p, []byte(logic.SystemPrompt), 0o644)
+	return p, os.WriteFile(p, []byte(text), 0o644)
 }
 
 type result struct {
@@ -65,14 +69,14 @@ var (
 	results []result
 )
 
-// job is one prompt being handled in the background: it finds the VS Code project, runs `claude -p`
+// job is one prompt being handled in the background: it finds the VS Code project or Notepad file, runs `claude -p`
 // and queues the result for the UI thread. Doing this off the UI thread matters because the keyboard
 // hook shares that thread: a slow file read there would stall typing system-wide.
 type job struct {
 	id        int
 	mu        sync.Mutex
 	cmd       *exec.Cmd
-	dir       string
+	t         target
 	cancelled bool
 }
 
@@ -85,10 +89,10 @@ func (j *job) kill() {
 	killTree(c)
 }
 
-func (j *job) project() string {
+func (j *job) target() target {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.dir
+	return j.t
 }
 
 func finish(r result) {
@@ -98,20 +102,20 @@ func finish(r result) {
 	postMessage(mainHwnd, wmDone, 0, 0)
 }
 
-// startJob runs prompt against the project VS Code has open.
+// startJob runs prompt against the project VS Code has open, or the file open in Notepad.
 // Read-only tools: Claude can look at the code but can't edit files or run commands.
 // User settings only: a cloned repo's .claude/settings.json hooks would otherwise run shell commands.
 func startJob(id int, prompt, model string) *job {
 	j := &job{id: id}
 	go func() {
 		fail := func(msg string) { finish(result{id: id, err: msg, code: -2}) }
-		dir := logic.PickProject(vscodeWindowTitle(), recentVSCodeFolders())
-		if dir == "" {
-			fail("No VS Code project found")
+		t := resolveTarget()
+		if !t.found() {
+			fail("No VS Code project found (and no Notepad window open)")
 			return
 		}
 		j.mu.Lock()
-		j.dir = dir
+		j.t = t
 		j.mu.Unlock()
 		postMessage(mainHwnd, wmStarted, 0, 0)
 
@@ -120,15 +124,19 @@ func startJob(id int, prompt, model string) *job {
 			fail(err.Error())
 			return
 		}
-		spf, err := systemPromptFile()
+		spf, err := systemPromptFile(t)
 		if err != nil {
 			fail(err.Error())
 			return
 		}
+		if t.file != "" { // let Claude know which file is open (its folder is the working directory)
+			prompt = "The file open in Notepad is " + t.file + " (in the current directory).\n" + prompt
+		}
+		logf("starting %s for %s %q in %s (model %s)", exe, t.app(), t.name, t.dir, model)
 		cmd := exec.Command(exe, "-p", "--strict-mcp-config", "--no-session-persistence",
 			"--setting-sources", "user", "--model", model,
 			"--tools", "Read,Grep,Glob", "--append-system-prompt-file", spf)
-		cmd.Dir = dir
+		cmd.Dir = t.dir
 		cmd.Stdin = strings.NewReader(prompt) // prompt via stdin, never via a command line
 		var so, se bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &so, &se

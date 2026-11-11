@@ -16,12 +16,19 @@ const SystemPrompt = "You run headless behind a clipboard hotkey. The user is co
 	"no explanation, no markdown fences, no preamble. If the answer spans several files, put a comment line with " +
 	"the file path before each file's code. If the request is unclear, make the most reasonable assumption and still reply with code only."
 
+// NotepadSystemPrompt is used instead of SystemPrompt when the user is writing in Notepad.
+const NotepadSystemPrompt = "You run headless behind a clipboard hotkey. The user is writing in Notepad, a plain text editor. " +
+	"If a file is mentioned in the request you may read it (Read) for context. " +
+	"Your final reply is copied straight to the clipboard and pasted into Notepad, so reply with ONLY the text to insert: " +
+	"no explanation, no markdown fences, no markdown formatting, no preamble. " +
+	"If the request is for code, reply with the code only. If the request is unclear, make the most reasonable assumption and still reply with the text only."
+
 // HoldTime: key released sooner = tap; held longer = clipboard ghost.
 // Raise it if slow taps open the ghost instead of the prompt.
 const HoldTime = 0.2
 
 // DoubleTapWindow: two taps closer together than this clear the clipboard.
-const DoubleTapWindow = 0.35
+const DoubleTapWindow = 0.5
 
 // GhostPreview is the text for the hold-key overlay (it scrolls); capped so a huge clipboard stays fast to lay out.
 func GhostPreview(s string, maxLines, maxCols int) string {
@@ -113,6 +120,89 @@ func PickProject(windowTitle string, recent []string) string {
 	}
 	if len(recent) > 0 {
 		return recent[0]
+	}
+	return ""
+}
+
+// NotepadFile extracts the file name from a Notepad window title such as "*notes.txt - Notepad".
+// It returns false for an unsaved document ("Untitled").
+func NotepadFile(title string) (string, bool) {
+	name := title
+	if i := strings.LastIndex(name, " - "); i >= 0 { // drop the app name (it is localized, so match by position)
+		name = name[:i]
+	}
+	name = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "*")) // "*" marks unsaved changes
+	if name == "" || strings.EqualFold(name, "Untitled") {
+		return "", false
+	}
+	return name, true
+}
+
+// ParseLnkTarget reads the local target path out of a Windows .lnk shortcut (MS-SHLLINK).
+// Notepad files opened from a dialog or Explorer leave one in the Recent folder.
+func ParseLnkTarget(b []byte) (string, bool) {
+	le16 := func(o int) int { return int(b[o]) | int(b[o+1])<<8 }
+	le32 := func(o int) int { return le16(o) | le16(o+2)<<16 }
+	if len(b) < 0x4C || le32(0) != 0x4C {
+		return "", false
+	}
+	flags := le32(0x14)
+	off := 0x4C
+	if flags&0x1 != 0 { // HasLinkTargetIDList
+		if off+2 > len(b) {
+			return "", false
+		}
+		off += 2 + le16(off)
+	}
+	li := off
+	if flags&0x2 == 0 || li+28 > len(b) { // HasLinkInfo
+		return "", false
+	}
+	if le32(li+8)&0x1 == 0 { // VolumeIDAndLocalBasePath
+		return "", false
+	}
+	cstr := func(o int) string {
+		if o <= 0 || li+o >= len(b) {
+			return ""
+		}
+		start := li + o
+		end := start
+		for end < len(b) && b[end] != 0 {
+			end++
+		}
+		return string(b[start:end])
+	}
+	wstr := func(o int) string {
+		if o <= 0 || li+o+1 >= len(b) {
+			return ""
+		}
+		var u []rune
+		for p := li + o; p+1 < len(b); p += 2 {
+			c := le16(p)
+			if c == 0 {
+				break
+			}
+			u = append(u, rune(c))
+		}
+		return string(u)
+	}
+	var path string
+	if le32(li+4) >= 0x24 && li+36 <= len(b) { // unicode strings are present
+		path = wstr(le32(li+28)) + wstr(le32(li+32))
+	}
+	if path == "" {
+		path = cstr(le32(li+16)) + cstr(le32(li+24))
+	}
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// DirOf is the folder part of a Windows path.
+func DirOf(p string) string {
+	if i := strings.LastIndexAny(p, `\/`); i > 0 {
+		return p[:i]
 	}
 	return ""
 }
